@@ -1,0 +1,64 @@
+name: PR Security Guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  security-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect Malicious or Invalid Filenames
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              per_page: 100
+            });
+            
+            // Characters that completely break Windows filesystems
+            const invalidWindowsChars = /[<>:"|?*]/;
+            // Executables and scripts that shouldn't be added by random contributors
+            const restrictedExtensions = [/\.exe$/i, /\.dll$/i, /\.bat$/i, /\.cmd$/i, /\.sh$/i, /\.ps1$/i];
+            
+            let hasViolation = false;
+            let violations = [];
+            
+            for (const file of files) {
+              // Get just the filename (ignore folder paths)
+              const filename = file.filename.split('/').pop(); 
+              
+              if (invalidWindowsChars.test(filename)) {
+                hasViolation = true;
+                violations.push(`- ❌ \`${file.filename}\`: Contains invalid characters (like \`*\`, \`?\`, \`<\`, \`>\`, \`:\`, \`|\`). This intentionally breaks Windows computers cloning the repo.`);
+              }
+              
+              if (restrictedExtensions.some(regex => regex.test(filename))) {
+                hasViolation = true;
+                violations.push(`- ⚠️ \`${file.filename}\`: Executable or script files are strictly prohibited for security reasons.`);
+              }
+            }
+            
+            if (hasViolation) {
+              const body = `🚨 **SECURITY GUARD ALERT** 🚨\n\nYour Pull Request contains files that violate repository security policies:\n\n${violations.join('\n')}\n\n**Action Required:** Please rename or remove these files immediately. This PR is blocked until these issues are resolved.`;
+              
+              // Post comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+              
+              // Fail the action (which blocks merging if branch protection is on)
+              core.setFailed("Pull request contains malicious filenames or restricted file types.");
+            } else {
+              console.log("All file checks passed securely.");
+            }
