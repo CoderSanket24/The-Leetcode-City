@@ -23,6 +23,42 @@ jobs:
         with:
           script: |
             const prUser = context.payload.pull_request.user.login;
+            const headRef = context.payload.pull_request.head.ref;
+            const branchMatch = headRef.match(/^(\d+)-/);
+            let labelsToAdd = new Set(["Gssoc 26", "gssoc:approved"]);
+            
+            // 1. Try to get issue number from branch name (e.g., 2-issue-name)
+            if (branchMatch) {
+              const issueNumber = parseInt(branchMatch[1]);
+              try {
+                const issue = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber
+                });
+                issue.data.labels.forEach(label => labelsToAdd.add(label.name));
+              } catch (e) {
+                console.log(`Could not fetch labels for issue #${issueNumber}`);
+              }
+            }
+            
+            // 2. Try to get issue number from PR body (e.g., Fixes #123)
+            const body = context.payload.pull_request.body || "";
+            const issueRegex = /(?:fix|fixes|fixed|close|closes|closed|resolve|resolves|resolved)\s+#(\d+)/gi;
+            let match;
+            while ((match = issueRegex.exec(body)) !== null) {
+              const issueNumber = parseInt(match[1]);
+              try {
+                const issue = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber
+                });
+                issue.data.labels.forEach(label => labelsToAdd.add(label.name));
+              } catch (e) {
+                console.log(`Could not fetch labels for issue #${issueNumber}`);
+              }
+            }
             
             // Assign the PR to the user who opened it
             await github.rest.issues.addAssignees({
@@ -32,12 +68,12 @@ jobs:
               assignees: [prUser]
             });
             
-            // Add Gssoc labels
+            // Add collected labels (Gssoc + issue labels)
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              labels: ["Gssoc 26", "gssoc:approved"]
+              labels: Array.from(labelsToAdd)
             });
             
             // Request review from Ixotic27
