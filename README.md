@@ -132,78 +132,11 @@ The `.env.example` file comes **pre-filled with public read-only keys** so you c
 > **🎉 NEW: Zero-Config Contribution Workflow!**
 > We've just made contributing 10x easier. You no longer need to set up any API keys to work on the UI, 3D scenes, or styling. Just run `npx leetcode-city init` and start coding immediately! See [Getting Started](#-getting-started) for details.
 
-We welcome contributions! Here's how:
-
-1. **Get assigned** — Comment `assign me` on any open, unassigned issue
-2. **Fork the repo** and create a branch named `<issue-number>-description`
-3. **Make your changes** — Run `npm run lint` before committing
-4. **Open a Pull Request** — Include `Fixes #<issue-number>` in the description
-
-> ⚠️ **Important:** Do NOT submit PRs from your `main` branch. Always create a feature branch. PRs from `main`/`master` are auto-rejected.
-
-### Assignment Rules
-
-- First commenter gets the issue (first-come, first-served)
-- Maximum **3 open issues** per contributor
-- **48-hour deadline** to submit a PR after assignment
-- Issue conversation is locked after assignment — discuss in your PR
-
-### Automated PR Review
-
-Every PR automatically gets:
-- 🤖 **GitHub Copilot** code review
-- 🔍 **Security scan** (regex-based, zero AI tokens)
-- 🏷️ **Auto-labeling** (type, difficulty, GSSoC)
-- ✅ **CI checks** (lint + build)
-
-### Commit Convention
-
-Start with an emoji + type. Single line, present tense, concise.
-
-| Emoji | Type | When |
-|-------|------|------|
-| ✨ | `feat` | New features |
-| 🐛 | `fix` | Bug fixes |
-| ♻️ | `refactor` | Code restructuring |
-| 📝 | `docs` | Documentation |
-| 🎨 | `style` | UI/CSS changes |
-| ⚡ | `perf` | Performance improvements |
-| 🧪 | `test` | Adding tests |
-
----
-
-## 🏷️ PR Label System
-
-### Auto-Applied by Bot
-
-| Label | When |
-|-------|------|
-| `type:bug`, `type:feature`, `type:docs`, etc. | Detected from PR title/branch |
-| `gssoc:approved` | Every merged PR |
-| `Gssoc 26` | Every assigned issue/PR |
-| `status:blocked` | CI fails |
-| `needs-rebase` | Merge conflicts |
-| `needs-details` | PR template incomplete |
-
-### Applied by Maintainer
-
-| Label | Purpose |
-|-------|---------|
-| `level:beginner` / `intermediate` / `advanced` / `critical` | Difficulty |
-| `quality:clean` / `quality:exceptional` | Code quality bonus |
-| `mentor:username` | Mentor reviewed this PR |
-
----
-
-## 📊 GSSoC Scoring
-
-```
-Score: 50 + (difficulty × quality) + type_bonus
-```
-
-- `gssoc:approved` gives **+50 base points** (applied to every PR)
-- Difficulty and quality multipliers are set by maintainers
-- Type bonus is automatically detected
+Please see our comprehensive [Contributing Guide](CONTRIBUTING.md) for full details on:
+- 🚀 How to set up the project (Zero-config)
+- 📝 Assignment rules and PR guidelines
+- 🏷️ Our label system and automated reviews
+- 🏆 GSSoC 2026 Scoring and information
 
 ---
 
