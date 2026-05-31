@@ -37,14 +37,20 @@ const TANK_FIRE_DELAY = 0.65;
 const TANK_FIRE_INTERVAL = 0.85;
 const TANK_FIRE_FLASH_DURATION = 0.16;
 
+/** How far from the defender building the tank stops and fires (world units). */
+const TANK_STOP_DISTANCE = 15;
+
+/**
+ * Vehicle types that move on the ground plane (Y ≈ 0) rather than
+ * following the aerial orbit path. Extend this set to add new ground
+ * vehicles without touching any phase logic.
+ */
+const GROUND_VEHICLE_TYPES = new Set(["vehicle_tank"]);
+
 // ─── Easing ───────────────────────────────────────────────────
 
 const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
 const smoothstep = (t: number) => t * t * (3 - 2 * t);
-const easeOutBack = (t: number) => {
-  const c = 1.70158;
-  return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2);
-};
 
 const getTankFirePulse = (elapsedTime: number) => {
   const fireTime = elapsedTime - TANK_FIRE_DELAY;
@@ -468,7 +474,7 @@ function TankMesh({ isAttacking = false, targetPos }: { isAttacking?: boolean; t
   });
 
   return (
-    <group ref={tankRef} position={[0, -0.8, 0]}> {/* Offset down to simulate ground level */}
+    <group ref={tankRef} position={[0, -0.8, 0]}> {/* -0.8 offsets the hull center so treads sit flush on Y=0 when the group origin is at ground level */}
       {/* Main Hull */}
       <mesh position={[0, 0, 0]}>
         <boxGeometry args={[1.5, 0.6, 2.5]} />
@@ -1249,6 +1255,14 @@ export default function RaidSequence3D({ phase, attacker, defender, raidData, on
   // Force re-render when refs that gate JSX visibility change
   const [, forceRender] = useState(0);
 
+  // ── Vehicle type flags ──
+  // Declared above useFrame so the animation loop can read them without closure staleness.
+  const vehicleType = raidData?.vehicle ?? "airplane";
+  /** True for vehicle_tank; used by ProjectilePool to select tank-shell ballistics. */
+  const isTank = vehicleType === "vehicle_tank";
+  /** True when the active vehicle travels on the ground plane instead of the air orbit path. */
+  const isGroundVehicle = GROUND_VEHICLE_TYPES.has(vehicleType);
+
   // ── Positions ──
 
   const attackerPos = useMemo(() => {
@@ -1295,6 +1309,36 @@ export default function RaidSequence3D({ phase, attacker, defender, raidData, on
       attackerPos.z + flightDir.z * 8,
     );
   }, [attackerPos, flightDir]);
+
+  // ── Ground vehicle positions (only used when isGroundVehicle is true) ──
+
+  /** Where the tank first appears: ORBIT_RADIUS units from the defender on the attacker→defender axis, at Y = 0. */
+  const tankSpawnPos = useMemo(() => {
+    const toDefender = new THREE.Vector3(
+      defenderTopPos.x - attackerPos.x,
+      0,
+      defenderTopPos.z - attackerPos.z,
+    ).normalize();
+    return new THREE.Vector3(
+      defenderTopPos.x - toDefender.x * ORBIT_RADIUS,
+      0,
+      defenderTopPos.z - toDefender.z * ORBIT_RADIUS,
+    );
+  }, [attackerPos, defenderTopPos]);
+
+  /** Where the tank halts and fires: TANK_STOP_DISTANCE units from the defender, at Y = 0. */
+  const tankFirePos = useMemo(() => {
+    const toDefender = new THREE.Vector3(
+      defenderTopPos.x - attackerPos.x,
+      0,
+      defenderTopPos.z - attackerPos.z,
+    ).normalize();
+    return new THREE.Vector3(
+      defenderTopPos.x - toDefender.x * TANK_STOP_DISTANCE,
+      0,
+      defenderTopPos.z - toDefender.z * TANK_STOP_DISTANCE,
+    );
+  }, [attackerPos, defenderTopPos]);
 
   // Flight path: starts where intro ends, high cruise, descend to orbit entry
   const flightCurve = useMemo(() => {
@@ -1392,6 +1436,43 @@ export default function RaidSequence3D({ phase, attacker, defender, raidData, on
     switch (phase) {
       // ───────── INTRO: camera focuses, vehicle parked, then lifts off ─────────
       case "intro": {
+        // ── Ground vehicle: park on ground facing defender, no liftoff ──
+        if (isGroundVehicle) {
+          // Camera: pull back from behind the tank to frame the scene
+          const camProgress = Math.min(t / 2.5, 1);
+          const camEase = smoothstep(camProgress);
+          const behindDir = new THREE.Vector3(
+            tankSpawnPos.x - defenderTopPos.x,
+            0,
+            tankSpawnPos.z - defenderTopPos.z,
+          ).normalize();
+          _camTarget.set(
+            tankSpawnPos.x + behindDir.x * (50 - camEase * 20),
+            20 + camEase * 5,
+            tankSpawnPos.z + behindDir.z * (50 - camEase * 20),
+          );
+          if (!cameraSnapped.current) {
+            cameraSnapped.current = true;
+            camera.position.copy(_camTarget);
+          } else {
+            camera.position.lerp(_camTarget, 0.06);
+          }
+          camera.lookAt(tankSpawnPos.x, 0, tankSpawnPos.z);
+
+          // Vehicle: stationary on the ground, facing the defender
+          if (vehicleRef.current) {
+            vehicleRef.current.position.set(tankSpawnPos.x, tankSpawnPos.y, tankSpawnPos.z);
+            vehicleRef.current.scale.setScalar(2);
+            _vehicleTarget.set(defenderTopPos.x, 0, defenderTopPos.z);
+            vehicleRef.current.lookAt(_vehicleTarget);
+            vehicleRef.current.rotateY(Math.PI); // nose is -Z
+          }
+
+          if (t >= 4.5) onPhaseComplete("intro");
+          break;
+        }
+
+        // ── Air vehicle: original liftoff logic ──
         const rooftopY = attackerPos.y - 10; // attackerPos is height+10, rooftop is height
 
         // Phase 1 (0-2.5s): camera dolly in, vehicle parked on rooftop
@@ -1450,6 +1531,46 @@ export default function RaidSequence3D({ phase, attacker, defender, raidData, on
 
       // ───────── FLIGHT: follow spline, trailing camera ─────────
       case "flight": {
+        // ── Ground vehicle: drive along the ground from spawn to fire position ──
+        if (isGroundVehicle) {
+          // Advance slightly faster than air flight so the timing feels responsive
+          flightProgress.current = Math.min(flightProgress.current + delta * 0.22, 1);
+          const fp = flightProgress.current;
+          const eased = smoothstep(fp);
+
+          // Interpolate position along the ground (Y stays 0)
+          const gx = tankSpawnPos.x + (tankFirePos.x - tankSpawnPos.x) * eased;
+          const gz = tankSpawnPos.z + (tankFirePos.z - tankSpawnPos.z) * eased;
+
+          if (vehicleRef.current) {
+            vehicleRef.current.position.set(gx, 0, gz);
+            vehicleRef.current.scale.setScalar(2);
+            _vehicleTarget.set(defenderTopPos.x, 0, defenderTopPos.z);
+            vehicleRef.current.lookAt(_vehicleTarget);
+            vehicleRef.current.rotateY(Math.PI); // nose is -Z
+          }
+
+          // Camera: low side-tracking shot, perpendicular to drive direction
+          const driveDir = new THREE.Vector3(
+            tankFirePos.x - tankSpawnPos.x,
+            0,
+            tankFirePos.z - tankSpawnPos.z,
+          ).normalize();
+          // Perpendicular to drive direction in the XZ plane
+          const perpDir = new THREE.Vector3(-driveDir.z, 0, driveDir.x);
+          _camTarget.set(
+            gx + perpDir.x * 35,
+            12,
+            gz + perpDir.z * 35,
+          );
+          camera.position.lerp(_camTarget, 0.08);
+          camera.lookAt(gx, 0, gz);
+
+          if (fp >= 1.0) onPhaseComplete("flight");
+          break;
+        }
+
+        // ── Air vehicle: original spline flight logic ──
         flightProgress.current = Math.min(flightProgress.current + delta * 0.16, 1);
         const fp = flightProgress.current;
         const eased = smoothstep(fp);
@@ -1498,6 +1619,66 @@ export default function RaidSequence3D({ phase, attacker, defender, raidData, on
 
       // ───────── ATTACK: orbiting gun run ─────────
       case "attack": {
+        // ── Ground vehicle: hold fire position on the ground, turret auto-aims ──
+        if (isGroundVehicle) {
+          if (vehicleRef.current) {
+            vehicleRef.current.position.set(tankFirePos.x, 0, tankFirePos.z);
+            vehicleRef.current.scale.setScalar(2);
+            // Face the hull toward the defender; TankMesh's own useFrame rotates the turret
+            _vehicleTarget.set(defenderTopPos.x, 0, defenderTopPos.z);
+            vehicleRef.current.lookAt(_vehicleTarget);
+            vehicleRef.current.rotateY(Math.PI); // nose is -Z
+          }
+
+          // Camera: low cinematic angle, slow orbit around the exchange
+          const ap = t / ATTACK_DURATION;
+          const camAngle = Math.atan2(
+            tankFirePos.z - defenderTopPos.z,
+            tankFirePos.x - defenderTopPos.x,
+          ) + ap * Math.PI * 0.3;
+          _camTarget.set(
+            defenderTopPos.x + Math.cos(camAngle) * 45,
+            18,
+            defenderTopPos.z + Math.sin(camAngle) * 45,
+          );
+          camera.position.lerp(_camTarget, 0.05);
+          camera.lookAt(defenderTopPos.x, 0, defenderTopPos.z);
+
+          // ── Shared event triggers (identical timing to air attack) ──
+
+          // Sound at 1s
+          if (t >= 1.0 && !soundPlayed.current) {
+            soundPlayed.current = true;
+            playRaidSound("shoot");
+          }
+
+          // Progressive shake during barrage (2s+)
+          if (t >= 2.0 && t < 4.5) {
+            const strafeProgress = (t - 2.0) / 2.5;
+            triggerShake((0.15 + strafeProgress * 0.4) * delta * 8);
+          }
+
+          // Climax at 4.5s
+          if (t >= 4.5 && !climaxTriggered.current) {
+            climaxTriggered.current = true;
+            if (raidData?.success) {
+              triggerShake(4.0);
+              playRaidSound("explosion");
+              debrisActive.current = true;
+              shockwaveActive.current = true;
+            } else {
+              triggerShake(1.5);
+              playRaidSound("shield_hit");
+              hitIntensityRef.current = 1;
+            }
+            forceRender(n => n + 1);
+          }
+
+          if (t >= ATTACK_DURATION) onPhaseComplete("attack");
+          break;
+        }
+
+        // ── Air vehicle: original orbiting gun-run logic ──
         const topX = defenderTopPos.x;
         const topY = defenderTopPos.y;
         const topZ = defenderTopPos.z;
@@ -1604,6 +1785,32 @@ export default function RaidSequence3D({ phase, attacker, defender, raidData, on
 
       // ───────── OUTRO WIN: dramatic crane shot ─────────
       case "outro_win": {
+        // ── Ground vehicle: hold position, camera rises for a victory crane shot ──
+        if (isGroundVehicle) {
+          if (vehicleRef.current) {
+            vehicleRef.current.position.set(tankFirePos.x, 0, tankFirePos.z);
+            vehicleRef.current.scale.setScalar(2);
+            // Keep hull facing defender; turret tracks via TankMesh useFrame
+            _vehicleTarget.set(defenderTopPos.x, 0, defenderTopPos.z);
+            vehicleRef.current.lookAt(_vehicleTarget);
+            vehicleRef.current.rotateY(Math.PI);
+          }
+
+          const progress = Math.min(t / 3.5, 1);
+          const ease = easeOutCubic(progress);
+          const slowAngle = t * 0.15;
+          const dist = ORBIT_RADIUS * 1.6;
+          _camTarget.set(
+            defenderTopPos.x + Math.cos(slowAngle) * dist,
+            defenderTopPos.y + 15 + ease * 35,
+            defenderTopPos.z + Math.sin(slowAngle) * dist,
+          );
+          camera.position.lerp(_camTarget, 0.07);
+          camera.lookAt(defenderTopPos);
+          break;
+        }
+
+        // ── Air vehicle: original victory orbit logic ──
         const progress = Math.min(t / 3.5, 1);
         const ease = easeOutCubic(progress);
         const riseY = defenderTopPos.y + 15 + ease * 35;
@@ -1646,6 +1853,41 @@ export default function RaidSequence3D({ phase, attacker, defender, raidData, on
       case "outro_lose": {
         const progress = Math.min(t / 3, 1);
 
+        // ── Ground vehicle: reverse back toward spawn along the ground ──
+        if (isGroundVehicle) {
+          if (vehicleRef.current) {
+            // Reverse direction: tankFirePos → tankSpawnPos
+            const retreatDir = new THREE.Vector3(
+              tankSpawnPos.x - tankFirePos.x,
+              0,
+              tankSpawnPos.z - tankFirePos.z,
+            ).normalize();
+
+            vehicleRef.current.position.addScaledVector(retreatDir, delta * 20);
+            vehicleRef.current.position.y = 0; // enforce ground plane
+
+            // Keep facing defender (backing away)
+            _vehicleTarget.set(defenderTopPos.x, 0, defenderTopPos.z);
+            vehicleRef.current.lookAt(_vehicleTarget);
+            vehicleRef.current.rotateY(Math.PI);
+
+            vehicleRef.current.scale.setScalar(2);
+          }
+
+          // Camera: pull back with a slow orbit for cinematic reveal
+          const loseAngle = t * 0.12;
+          const loseDist = ORBIT_RADIUS * 1.4;
+          _camTarget.set(
+            defenderTopPos.x + Math.cos(loseAngle) * loseDist,
+            20 + progress * 15,
+            defenderTopPos.z + Math.sin(loseAngle) * loseDist,
+          );
+          camera.position.lerp(_camTarget, 0.05);
+          camera.lookAt(defenderTopPos.x, 0, defenderTopPos.z);
+          break;
+        }
+
+        // ── Air vehicle: original retreat logic ──
         if (vehicleRef.current) {
           // Fly away back towards attacker direction
           _tempVec.set(
@@ -1698,11 +1940,10 @@ export default function RaidSequence3D({ phase, attacker, defender, raidData, on
 
   if (phase === "idle" || phase === "preview" || phase === "done") return null;
 
-  const vehicleType = raidData?.vehicle ?? "airplane";
-  const isTank = vehicleType === "vehicle_tank";
   const isAttack = phase === "attack";
   const isOutro = phase === "outro_win" || phase === "outro_lose";
-  const showSmoke = phase === "flight" || isAttack;
+  // Ground vehicles don't leave an aerial smoke trail.
+  const showSmoke = !isGroundVehicle && (phase === "flight" || isAttack);
 
   return (
     <group>
